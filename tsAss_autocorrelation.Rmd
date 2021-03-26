@@ -5,10 +5,39 @@ output: html_notebook
 
 Q3. Time Series Plot with mean line
 ```{r}
-# Generate 
+# Generate time series
+n  <- 100   # length of time series
+m  <- 0     # series mean
+sd <- 1     # series standard deviation
+
+# Code below from Bookdown/Napier 
+# Gaussian
+Norm_white_noise <- rnorm(n)
+mean_line <- rep(m,n)
+# Exponential 
+Exp_white_noise <- rexp(n)
+
+# moving average
+Norm_mov_avg <- filter(Norm_white_noise,sides=2,rep(1/3,3))  #TAS+Apps: 13
+
+plot(Norm_white_noise, type = "o")
+lines(mean_line)
+
+plot(Norm_mov_avg, type="o")
+lines(mean_line)
 ```
 
 Q4. Zoom in on TS; highlighted two data points that would contribute to negative lag-1 ac
+```{r}
+
+```
+
+Q5. Lagged scatterplots, lags 1-4
+```{r}
+
+```
+
+Q6. ACF
 ```{r}
 
 ```
