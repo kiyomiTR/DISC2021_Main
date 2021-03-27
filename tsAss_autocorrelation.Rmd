@@ -68,8 +68,9 @@ Q5. Lagged scatterplots, lags 1-4
 ```
 
 Q6. ACF
+Notes to me: Code from Napier: 1.5 Time series properties (last third of section)
 ```{r}
-
+acf(Norm_white_noise,lag.max=20,plot = TRUE)
 ```
 
 
