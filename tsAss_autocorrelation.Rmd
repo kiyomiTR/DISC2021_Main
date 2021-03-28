@@ -3,6 +3,10 @@ title: "Autocorrelation - Assignment"
 output: html_notebook
 ---
 
+```{r}
+library(astsa)
+```
+
 Q3. Time Series Plot with mean line
   PLUS extra code for
       1) exp white noise 
@@ -64,13 +68,21 @@ points(lag1_years[3],Norm_white_noise[lag1_years[3]],pch=17, col="red",cex=1.5)
 
 Q5. Lagged scatterplots, lags 1-4
 ```{r}
+# R base package
+#lag.plot(Norm_white_noise,lag=4, pch="o")
 
+# astsa package
+lag1.plot(Norm_white_noise,4,smooth=FALSE)
 ```
 
 Q6. ACF
 Notes to me: Code from Napier: 1.5 Time series properties (last third of section)
 ```{r}
-acf(Norm_white_noise,lag.max=20,plot = TRUE)
+acf(Norm_white_noise,lag.max=20,plot = TRUE, main="")
+
+# From astsa: plots both ACF and PACF
+#acf2(Norm_white_noise)
+acf2(Norm_white_noise,plot=FALSE)[,'ACF']  # prints data
 ```
 
 
