@@ -64,6 +64,11 @@ GHCN.prcp <- get_ghcn_daily(
 #> Please use `select()` instead.
 #> This warning is displayed once every 8 hours.
 #> Call `lifecycle::last_warnings()` to see where this warning was generated.
+
+
+```
+
+```{r}
 # Plot the NED again
 raster::plot(NED)
 # Plot the spatial locations
@@ -275,6 +280,17 @@ raster::plot(NASS)
 ```{r}
 # Get the NASS classification table
 raster::levels(NASS)[[1]]
+
+```
+
+Accessing data
+```{r}
+# code below does not work
+
+#data1 <- readRDS('~/Documents/Teaching/DISC2021_Rmain/DISC2021_Main/EXTRACTIONS/VEPIIN/ITRDB/VEPIIN_ITRDB.rds')
+
+# codes below DOES work - allows user to navigate to file. 
+panda <- readRDS(file.choose())
 
 ```
 
