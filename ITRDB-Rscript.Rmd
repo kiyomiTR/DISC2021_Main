@@ -1,0 +1,973 @@
+---
+title: "ITRDB Data availability and global ecological sensitivity"
+output: html_notebook
+---
+
+
+From this paper: 
+https://onlinelibrary-wiley-com.ezproxy4.library.arizona.edu/doi/full/10.1111/jbi.13488
+
+Zhao, Shoudong et al. (2018), Data from: The International Tree-Ring Data Bank (ITRDB) revisited: data availability and global ecological representativity, Dryad, Dataset, https://doi.org/10.5061/dryad.kh0qh06
+
+dataset is here: https://datadryad.org/stash/dataset/doi:10.5061/dryad.kh0qh06
+
+- an analysis of the "biases" in the ITRDB
+- maybe a source of helpful code to manipulate chronology data
+```{r}
+#Appendix S3: R script
+###################itrdb revisited analyses################?
+################settings and read the data#############
+##set wd and load libraries
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning")
+library(KernSmooth)
+library(raster)
+library(maptools)
+library(spatstat)
+library(rworldmap)
+library(maps)
+library(sp)
+library(maptools)
+library(countrycode)
+library(SDMTools)
+library(grid)
+library(rgeos)
+##load data
+metadata<-read.table('metadata_itrdb_final.csv', sep=",", header=T)
+head(metadata)
+##check the coordinates for errors
+plot(latitude~longitude, metadata)
+#cana134r has nonsensical coordinates -780, replaced with NA. re-run now is ok
+coordinates<-unique(na.omit(data.frame(metadata$longitude,
+                                                 metadata$latitude)))
+names(coordinates)<-c('lon', 'lat')
+head(coordinates)
+#create the point pattern window for the kernel
+myppp<-ppp(coordinates$lon, coordinates$lat, window=owin(c(-180,180), c(-90,90)))
+#'space' color palette
+cols <- rev(colorRampPalette(c('#ffffff','#6baed6', '#091644'))(60))
+
+############PLOT SPATIAL DISTRIBUTION IN SKYLIKE MAP#####################
+###create the empty plot, add the density, the points, and the world boundary
+plot(1, type="n", 
+     ylim=c(-90,90), 
+     xlim=c(-180,180), 
+     axes=F,
+     main='Spatial sampling representation of the ITRDB',
+     xlab='')
+plot(density(myppp, 10), col=cols, add=T)
+points(latitude~longitude, metadata,
+       cex=0.3,
+       col=rgb(255/255, 255/255, 217/255,0.15),
+       pch=16)
+data(worldMapEnv)
+map('world', 
+    fill = F, 
+    col = rgb(120/155, 129/155, 155/155,0.2),
+    add=T
+    )
+##add the legend
+cols2 <- rev(colorRampPalette(c('#ffffff','#6baed6', '#091644'))(60))
+for(i in c(0:60)){
+  polygon(x=c(0,0,60-i,60-i), y=c(-50,-45,-45,-50),col=cols[60-i], border=F)
+}
+tr<-rgb(1,1,1,0)
+polygon(x=c(0,0,60,60), y=c(-50,-45,-45,-50),col=tr, border='white')
+text(30,-40, labels='Chronologies density', cex=0.7, col='white')
+
+############INDIVIDUAL BIAS ANALYSES###################
+###species frequencies####
+#frequency of the species, raw
+barplot(rev(sort(table(metadata$species))),
+        col='indianred',
+        border=F,
+        las=2,
+        cex.names=0.4)
+#however, we have to remove the repeated files (ak007t, ak007x,...) that are several measurements of 
+#the same core. First add the dataset about broadleaves and conifers classification, then remove duplicates
+names(sort(table(metadata$species)))
+broad<-read.table('tree.species.conifers.broadleaves.csv', header=T, sep=',')
+head(broad)
+names(broad)[1]<-'speciesCode'
+head(metadata)
+metadata.con<-merge(metadata, broad)
+head(metadata.con)
+metadata2<-metadata.con[!duplicated(metadata.con[7:8]),]
+#calculate frequencies, sort by decreasing order and re-add the broadleaves.conifers to color the barplot
+freq<-data.frame(rev(sort(table(metadata2$species))))
+freq$speciesCode<-row.names(freq)
+names(freq)[1]<-'frequency'
+head(freq)
+species.merged<-merge(broad,freq)
+head(species.merged)
+species.merged<-species.merged[order(-species.merged$frequency),]
+##plot barplot frequencies, this time corrected
+palette(c(rgb(46/255,60/255,9/255),rgb(124/255,138/255,83/255)))
+barplot(species.merged$frequency,
+        col=species.merged$con.broad,
+        border=species.merged$con.broad,
+        las=2,
+        cex.names=0.4,
+        names=species.merged$species)
+abline(h=0)
+#and the barplot of the percentage of conifers
+pie(table(metadata2$con.broad), col=c(1,2))
+
+##spatial bias analysis (quantify)#####
+#the function to obtain the continent name from 
+#https://stackoverflow.com/questions/14334970/convert-latitude-and-longitude-coordinates-to-country-name-in-r
+#with minimal changes
+#   - column 1 contains the longitude in degrees
+#   - column 2 contains the latitude in degrees
+coords2country = function(points)
+{  
+  countriesSP <- getMap(resolution='low')
+    pointsSP = SpatialPoints(points, proj4string=CRS(proj4string(countriesSP)))  
+    indices = over(pointsSP, countriesSP)
+  indices$REGION   # returns the continent (7 continent model)
+}
+#create the emtpy dataframe
+countriesSP <- getMap(resolution='low')
+bias.dist<-data.frame(rep(1,999), rep(1, 999),rep(1,999),rep(1,999),rep(1,999),rep(1,999),rep(1,999))
+names(bias.dist)<-c('Africa','Antarctica','Asia','Oceania','Europe','North America','South America')
+#loop 999 times the number of series randomly and assign a continent, make the table of resulting points
+#note that Antarctica has remained, which may affect as it is a huge continent in the projection,
+#should not affect the relationship between continents however
+#first remove Antarctica
+no.antarctica <- subset(countriesSP, NAME != "Antarctica")
+set.seed(46846)
+#do not run, extremely long, results down
+#for(i in 1:999){
+#  set.seed(46846+i)
+#  sp.bias<-spsample(no.antarctica, n=3621, "random")
+#  a<- table(coords2country(data.frame(sp.bias@coords)))
+#  print(a)
+#  bias.dist[i,]<-a
+#}
+#head(bias.dist)
+#bias.no.an<-bias.dist[,-2]
+#head(bias.no.an)
+#names(bias.no.an)[c(5,6)]<-c('North_America','South_America')
+#write.csv(bias.no.an, file="bias.bootstrapping.csv")
+
+#read the results of the bootstrapping from previous run
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning")
+bias.no.an = read.table('bias.bootstrapping.csv', sep=",", header=T)
+#obtain the values for itrdb data--= it's all good
+itrdb.cont<-table(coords2country(data.frame(metadata2$longitude, metadata2$latitude)))
+par(las=1)
+##drawing as boxplot
+alp<-0.2
+colors<-c(rgb(102/255,194/255,165/255,alp),
+          rgb(252/255,141/255,98/255,alp),
+          rgb(141/255,160/255,203/255,alp),
+          rgb(231/255,138/255,195/255,alp),
+          rgb(166/255,216/255,84/255,alp),
+          rgb(255/255,217/255,47/255,alp))
+boxplot(bias.no.an, horizontal=TRUE, ylim=c(0,2200), col=colors,
+        border=F,
+        xlab='Frequency (number of chronologies)'
+        )
+points(y=jitter(rep(1, length(bias.no.an$Africa)),15), x=bias.no.an$Africa, col=colors[1])
+points(y=jitter(rep(2, length(bias.no.an$Asia)),8), x=bias.no.an$Asia, col=colors[2])
+points(y=jitter(rep(3, length(bias.no.an$Oceania)),5), x=bias.no.an$Oceania, col=colors[3])
+points(y=jitter(rep(4, length(bias.no.an$Europe)),4), x=bias.no.an$Europe, col=colors[4])
+points(y=jitter(rep(5, length(bias.no.an$North_America)),3), x=bias.no.an$North_America, col=colors[5])
+points(y=jitter(rep(6, length(bias.no.an$South_America)),2.5), x=bias.no.an$South_America, col=colors[6])
+points(y=c(1,2,3,4,5,6), x=apply(bias.no.an, MARGIN=2, FUN=mean), pch=23, col=1,bg=1, cex=1.5)
+points(y=1:6, x=itrdb.cont[-2], pch=23, cex=2, col='darkred', bg='indianred')
+distances<-abs(itrdb.cont[-2]-(apply(bias.no.an, MARGIN=2, FUN=mean)))/(apply(bias.no.an, MARGIN=2, FUN=sd))
+##distances measured in sd are pretty clarifying
+## should be normalized it to make one side over- and the other under-represented
+bias.no.an.norm<-bias.no.an
+for(i in c(1:6)){
+bias.no.an.norm[,i]<-(bias.no.an[,i]/mean(bias.no.an[,i]))-1
+} 
+head(bias.no.an.norm)
+boxplot(bias.no.an.norm, horizontal=TRUE, ylim=c(-2,2), col='white',
+          border=F,
+          xlab='Frequency (number of chronologies)')
+abline(v=0, lty=2)
+points(y=jitter(rep(1, length(bias.no.an.norm$Africa)),15), x=bias.no.an.norm$Africa, col=colors[1])
+points(y=jitter(rep(2, length(bias.no.an.norm$Asia)),8), x=bias.no.an.norm$Asia, col=colors[2])
+points(y=jitter(rep(3, length(bias.no.an.norm$Oceania)),5), x=bias.no.an.norm$Oceania, col=colors[3])
+points(y=jitter(rep(4, length(bias.no.an.norm$Europe)),4), x=bias.no.an.norm$Europe, col=colors[4])
+points(y=jitter(rep(5, length(bias.no.an.norm$North_America)),3), x=bias.no.an.norm$North_America, col=colors[5])
+points(y=jitter(rep(6, length(bias.no.an.norm$South_America)),2.5), x=bias.no.an.norm$South_America, col=colors[6])
+itrdb.cont.norm<-(itrdb.cont[-2]/apply(bias.no.an, MARGIN=2, FUN=mean))-1
+points(y=1:6, x=itrdb.cont.norm, pch=23, cex=2, col='darkred', bg='indianred')
+text(1.2,6.5, labels='Spatially overrepresented')
+text(-1.2,6.5, labels='Spatially underrepresented')
+
+####Elevation######
+##plotting the density accross elevation
+head(metadata2)
+plot(metadata2$elevation)
+##there is something odd with the elevations (many -1000)
+errors<-subset(metadata2, elevation<0)
+errors
+##oh, missing elevations are marked as -999
+metadata2$elevation[metadata2$elevation=="-999"]<-'NA'
+plot(metadata2$elevation)
+#fixed
+plot(density(as.numeric(metadata2$elevation), na.rm=TRUE))
+hist(as.numeric(metadata2$elevation), breaks=40, xlim=c(0,5000), ylim=c(0,500))
+##we have to compare with Worldclim DEM
+w <- getData('worldclim', var='alt', res=2.5)
+plot(w)
+alt<- extract(w, data.frame(metadata2$longitude,metadata2$latitude))
+plot(alt)
+plot(alt~metadata2$elevation)     
+hist(as.numeric(alt), breaks=40, xlim=c(0,5000), ylim=c(0,500))
+par(mfcol=c(2,1))
+hist(as.numeric(metadata2$elevation), breaks=40, xlim=c(0,5000),
+     ylim=c(0,500), col='grey50', main='Shoudong Elev', xlab='Elevation (m)')
+hist(as.numeric(alt), breaks=40, xlim=c(0,5000), 
+     ylim=c(0,500), col='grey90', main='Worldclim Dem', xlab='Elevation (m)')
+#they are very similar, we will use the more complete one of worldclim
+##however the high altitude are a way smaller area than the low elevations, correct by this
+hist(as.numeric(alt), breaks=40, xlim=c(0,5000), 
+     ylim=c(0,500), col='grey90', main='ITRDB elevation profile', xlab='Elevation (m)')
+world.alt<-hist(w, xlim=c(0,5000), breaks=72,
+                col='grey0', main='World elevations distribution', xlab='Elevation (m)')
+world.alt.data<-data.frame(world.alt$mids, world.alt$counts)
+itrdb.alt<-hist(as.numeric(alt), breaks=40, xlim=c(0,5000))
+itrdb.alt.data<-data.frame(itrdb.alt$mids, itrdb.alt$counts)
+names(world.alt.data)<-c('mid.elevation', 'world.freq')
+names(itrdb.alt.data)<-c('mid.elevation', 'itrdb.freq')
+alt.data<-merge(world.alt.data, itrdb.alt.data)
+head(alt.data)
+alt.data$corrected<-alt.data$world.freq/(sum(alt.data$world.freq)/sum(alt.data$itrdb.freq))
+par(mfcol=c(1,1))
+hist(as.numeric(alt), breaks=40, xlim=c(0,5000), 
+     ylim=c(0,700), col='grey90', main='ITRDB elevation profile', xlab='Elevation (m)')
+points(x=alt.data$mid.elevation, y=alt.data$corrected)
+head(alt.data)
+alt.data$corrected.freq<-(alt.data$itrdb.freq/alt.data$corrected)-1
+#plot it
+colors2<-c(rgb(252/255,141/255,98/255),
+          rgb(141/255,160/255,203/255))
+plot(alt.data$mid.elevation, y=alt.data$corrected.freq, ylim=c(-2,8.5), lwd=1,
+     col = ifelse(alt.data$corrected.freq < 0,colors2[1], colors2[2]),
+     pch=19,
+     cex=1.25,
+     main='Corrected elevation bias in the ITRDB',
+     xlab='Elevation',
+     ylab='Corrected frequencies'
+     )
+abline(h=0,lty=2)
+points(alt.data$mid.elevation, y=alt.data$corrected.freq, type='l', col=colors2[2])
+points(alt.data$mid.elevation, y=alt.data$corrected.freq,
+       col = ifelse(alt.data$corrected.freq < 0,colors2[1], colors2[2]),
+       pch=19,
+       cex=1.25)
+text(1000,6, labels='Spatially overrepresented')
+text(1000,-1, labels='Spatially underrepresented')
+
+###Temperature and water limitation on growth#######
+##maps are coming from Churkina and Running (1998) calculations based on water evapotranspiration, 
+## downloaded through the databasin.org with 0.5 degree resolution
+##load data
+temp.lim.r<-raster(("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Temperature limitation maps/temperature.limitation.asc.txt"))
+water.lim.r<-raster(("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Water limitation maps/water.limitation.asc.txt"))
+##check it out
+plot(temp.lim.r)
+plot(water.lim.r)
+#extract values
+temp.lim<-extract(temp.lim.r, data.frame(metadata2$longitude, metadata2$latitude))
+water.lim<-extract(water.lim.r, data.frame(metadata2$longitude, metadata2$latitude))
+#same for both maps
+#build the palette
+rbPal.temp <- colorRampPalette(c('black','firebrick2'))
+#assign color to each point, plot, add the borders and the legend with 
+#a loop of polygons overlayed (makes it a bit heavier image though)
+temp.lim.col <- rbPal.temp(10)[as.numeric(cut(temp.lim,breaks = 10))]
+plot(data.frame(metadata2$longitude, metadata2$latitude), col=temp.lim.col, pch=16, cex=0.4,
+     xlab='', ylab='',main='Temperature limitation on growth')
+data(worldMapEnv)
+map('world', 
+    fill = F, 
+    col = 'grey40',
+    boundary =T,
+    interior = F,
+    add=T
+)
+points(data.frame(metadata2$longitude, metadata2$latitude), col=temp.lim.col, pch=16, cex=0.5)
+#finally the legend
+for(i in c(0:100)){
+  polygon(x=c(0,0,100-i,100-i), y=c(-50,-40,-40,-50),col=rbPal.temp(100)[100-i], border=F)
+}
+text(0,-52, labels=min(temp.lim,na.rm=T), cex=0.7)
+text(100,-52, labels=max(temp.lim,na.rm=T), cex=0.7)
+#repeat for the water limitation
+rbPal.pre <- colorRampPalette(c('black','lightblue'))
+water.lim.col <- rbPal.pre(10)[as.numeric(cut(water.lim,breaks = 10))]
+plot(data.frame(metadata2$longitude, metadata2$latitude), col=water.lim.col, pch=16,cex=0.8,
+     xlab='', ylab='',main='Water limitation on growth')
+data(worldMapEnv)
+map('world', 
+    fill = F, 
+    col = 'grey40',
+    boundary =T,
+    interior = F,
+    add=T
+)
+points(data.frame(metadata2$longitude, metadata2$latitude), col=water.lim.col, pch=16,cex=0.8)
+for(i in c(0:100)){
+  polygon(x=c(0,0,100-i,100-i), y=c(-50,-40,-40,-50),col=rbPal.pre(100)[100-i], border=F)
+}
+text(0,-52, labels=min(water.lim,na.rm=T), cex=0.7)
+text(100,-52, labels=max(water.lim,na.rm=T), cex=0.7)
+#density plots
+#first extract the values from the density calculations
+temp.lim.den<-density(temp.lim, from=0,to=100, na.rm=T)
+water.lim.den<-density(water.lim, from=0, to=100, na.rm=T)
+##translate colors to transparent ones
+lightblue.tr<-rgb(173/255,216/255,230/255,0.5)
+firebrick.tr<-rgb(178/255,34/255,34/255,0.5)
+
+#plot it
+plot(temp.lim.den, col='firebrick2', lwd=2, ylim=c(0,0.10),
+     xlab= 'Temperature/precipiation limitation on growth (%)',
+     main='Climatic limitations on growth'
+     )
+polygon(x=c(0,temp.lim.den$x,100), y=c(0,temp.lim.den$y,0), col=firebrick.tr, border=F)
+lines(water.lim.den, col='lightblue3', lwd=2)
+polygon(x=c(0,water.lim.den$x,100), y=c(0,water.lim.den$y,0), col=lightblue.tr, border=F)
+###maybe histograms?
+te<-hist(temp.lim, breaks=10)
+pr<-hist(water.lim, breaks=10)
+plot(te, col=firebrick.tr,ylab='Number of chronologies')
+plot(pr, col=lightblue.tr,add=T, density=80)
+
+####Distribution by Ecoregions########
+##taken from the Koepen-Geigger climate regions maps, downloaded from their website
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Ecoregions")
+ecoregions<-read.table('KGcoords.txt', sep='\t', header=T)
+head(ecoregions)
+main.eco<-ecoregions[,-4]
+# create spatial points data frame
+spg <- main.eco
+coordinates(spg) <- ~ Lon + Lat
+# coerce to SpatialPixelsDataFrame
+gridded(spg) <- TRUE
+# coerce to raster
+main.eco.map <- raster(spg)
+barplot(table(main.eco$Main.Clim),
+        names=c('Equatorial',
+                'Arid',
+                'Warm temperate',
+                'Snow',
+                'Polar'))
+#obtain distribution
+climate<- extract(main.eco.map, data.frame(metadata2$longitude,metadata2$latitude))
+barplot(table(climate), names=c('Equatorial',
+                                'Arid',
+                                'Warm temperate',
+                                'Snow',
+                                'Polar'),
+        space=0, las=2)
+palette(c('chartreuse3', 'cornflowerblue', 'darkgoldenrod1', 'peachpuff3',
+  'mediumorchid2', 'turquoise3', 'wheat4', 'slategray2'))
+climate.class<-as.factor(climate)
+levels(climate.class)<-c('A','B','C','D','E')
+##checking that classification is correct (keeping names right!)
+plot(main.eco.map, col=c('green4','lightgreen','gold','lightgoldenrod4','lightcyan'),axes=F)
+points(metadata2$longitude,metadata2$latitude,col=climate.class, pch=as.character(climate.class))
+#it does
+#plot
+lightblue2.tr<-rgb(173/255,216/255,230/255,0.3)
+plot(main.eco.map, col=c('green4','gold','chartreuse','lightgoldenrod4','grey90'))
+points(metadata2$longitude,metadata2$latitude,col=rgb(.2,0.2,0.2,0.3), pch=21, cex=0.6, lwd=0.5)
+
+###seasonality####
+## we can limit the most urgent places to research as those with high seasonality and 
+##meeting all the requirements
+#download seasonality data from Worldclim (uses a CV of temperature and precipitation)
+bioclim <- getData('worldclim', var='bio', res=10)
+prec.seas<-bioclim$bio15
+temp.seas<-bioclim$bio4
+plot(temp.seas)
+#extract values for ITRDB locations
+prec.itrdb.min.seas<-extract(prec.seas, data.frame(metadata2$longitude,metadata2$latitude))
+temp.itrdb.min.seas<-extract(temp.seas, data.frame(metadata2$longitude,metadata2$latitude))
+plot(density(prec.seas))
+
+##areas of the world meet the seasonality values of the ITRDB
+# create classification matrix and reclassify
+boxplot.stats(temp.itrdb.min.seas)$stats
+boxplot.stats(prec.itrdb.min.seas)$stats
+reclass_pr <- c(-Inf, boxplot.stats(prec.itrdb.min.seas)$stats[2], 0,
+                boxplot.stats(prec.itrdb.min.seas)$stats[2], Inf, 1)
+reclass_pr.m <- matrix(reclass_pr,
+                    ncol = 3,
+                    byrow = TRUE)
+prec.seas.simp<-reclassify(prec.seas, reclass_pr.m)
+plot(prec.seas.simp)
+##for temperature
+reclass_t <- c(-Inf, boxplot.stats(temp.itrdb.min.seas)$stats[2], 0,
+               boxplot.stats(temp.itrdb.min.seas)$stats[2], Inf, 1)
+reclass_t <- matrix(reclass_t,
+                    ncol = 3,
+                    byrow = TRUE)
+temp.seas.simp<-reclassify(temp.seas, reclass_t)
+plot(temp.seas.simp)
+#areas that would meet both requirements would be
+suitable<-prec.seas.simp+temp.seas.simp
+plot(suitable)
+##that looks counterintuitive, let's see how values distribute
+par(mfcol=c(2,2))
+palette(colorRampPalette(c('gold','indianred','steelblue3'))(50))
+plot(prec.itrd.min.seas~temp.itrd.min.seas, 
+     col=as.numeric(metadata2$speciesCode), 
+     pch=as.character(metadata2$speciesCode),
+     bg=firebrick.tr,
+     xlim=c(960,25000), ylim=c(5,130),
+     xlab='Temperature seasonality',
+     ylab='Precipitation seasonality')
+plot(density(temp.itrd.min.seas, na.rm=T), xlim=c(960,25000))
+polygon(density(temp.itrd.min.seas, na.rm=T), col=firebrick.tr)
+plot(density(prec.itrd.min.seas, na.rm=T), xlim=c(5,130))
+polygon(density(prec.itrd.min.seas, na.rm=T), col=lightblue.tr)
+par(mfcol=c(1,1))
+#actually the distribution of points with the precipitation seasonality sems quite odd,
+##there are many points with very low seasonality (most actually) and there are points all over the gradient
+##while in the temp seasonality is much clearer and seems like a couple of threshold points (see density)
+#seems like using temperature makes better sense
+#let set a low requirement for temperature seasonality to ensure we cover most places
+reclass_t <- c(-Inf, boxplot.stats(temp.itrdb.min.seas)$stats[1], 0,
+               boxplot.stats(temp.itrdb.min.seas)$stats[1], Inf, 1)
+reclass_t <- matrix(reclass_t,
+                    ncol = 3,
+                    byrow = TRUE)
+temp.seas.simp<-reclassify(temp.seas, reclass_t)
+plot(temp.seas.simp)
+#2nd filter, forest cover area (those without forest won't be available for ITRDB even 
+#if the seasonality matches)
+#load data from NASA height raster (huge dataset though)
+forest.cover<-raster('C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Forest cover/Simard_Pinto_3DGlobalVeg_L3C.tif')
+plot(forest.cover)
+##we would have to filter out those with low values, lets put the threshold at 1m to remove high grasslands, 
+# and shrubslands
+reclass_cover<-c(0, 1,0,
+                 1,Inf,1)
+reclass_cover.m <- matrix(reclass_cover,
+                    ncol = 3,
+                    byrow = TRUE)
+forest.cover.simp<-reclassify(forest.cover, reclass_cover.m)
+plot(forest.cover.simp)
+#Check how our 2 filters interact, we cannot multiply them directly, as they have different resolution. resample the # higher resolution to match the lower one. Then multiply to have the proper output (1 suitable by 
+# both conditions and 0 unsuitable by at least one of them)
+#(don't run long)
+forest.cov.simp.resample<-resample(forest.cover, temp.seas.simp, method='bilinear')
+seaso.fores<-temp.seas.simp*forest.cov.simp.resample
+plot(seaso.fores)
+seaso.forest.simp=seaso.fores
+seaso.forest.simp[seaso.forest.simp>0]=1
+hist(seaso.forest.simp)
+plot(seaso.forest.simp)
+#that's a great baselayer for the projections
+
+###biodiversities####
+##firts plant diversity
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Biodiverisity/Number of plant species per ecoregion")
+plant.div<-readShapeSpatial("plant.div.shp")
+plant.div<-extract(plant.div, data.frame(metadata2$longitude,metadata2$latitude))
+plot(plant.div$plant_spcs)
+plant.div.data<-data.frame(metadata2$longitude, metadata2$latitude, plant.div$plant_spcs)
+names(plant.div.data)<-c('lon',
+                         'lat',
+                         'plant.div')
+palette(colorRampPalette(c('lightgreen','darkgreen'))(150))
+plant.div.data$plant.div<-as.numeric(ifelse(plant.div.data$plant.div=='-9999', 'NA',plant.div.data$plant.div))
+size<-plant.div.data$plant.div/3000
+plot(plant.div.data$lon,plant.div.data$lat, cex=size, col=firebrick.tr, pch=19)
+plot(density(plant.div.data$plant.div, na.rm=T))
+hist(plant.div.data$plant.div, col=firebrick.tr, density=50,
+     main='Plant vascular diversity captured in the ITRDB',
+     xlab='Total number of plant species estimated in the Biome',
+     ylab='Frequency (number of chronologies)')
+
+##associated biodiversity
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Biodiverisity/associated bio/Projected raster")
+ass.div<-raster(("all_div_projected.txt"))
+plot(ass.div)
+points(metadata2$longitude,metadata2$latitude)
+ass.div.itrdb<-extract(ass.div, data.frame(metadata2$longitude,metadata2$latitude))
+plot(ass.div.itrdb)
+size2<-ass.div.itrdb/300
+plot(metadata2$longitude,metadata2$latitude, cex=size2, col=firebrick.tr, pch=19)
+hist(ass.div.itrdb, col=firebrick.tr, density=50,
+     main='Forest biodiversity in ITRDB forests',
+     xlab='Total number of species estimated (Amphibians, Birds and Mammals)',
+     ylab='Frequency (number of chronologies)',
+     xlim=c(0,1000))
+par(mfcol=c(2,1))
+hist(plant.div.data$plant.div, col=firebrick.tr, density=50,
+     main='Plant vascular diversity captured in the ITRDB',
+     xlab='Total number of plant species estimated in the Biome',
+     ylab='Frequency (number of chronologies)')
+hist(ass.div.itrdb, col=firebrick.tr, density=50,
+     main='Forest biodiversity in ITRDB forests',
+     xlab='Total number of species estimated (Amphibians, Birds and Mammals)',
+     ylab='Frequency (number of chronologies)',
+     xlim=c(0,1000))
+par(mfcol=c(1,1))
+
+###############Combine individual biases to create the priority index ##############
+###############transform each bias into a 0-1 response function and project it to the whole map
+###continental bias#############
+#bring the data from the bias analysis before
+countries<-c('S.America','N_America','Europe','Oceania','Asia','Africa')
+stand.bias<-c(-0.47,1.93,-0.06,-0.37,-0.60,-0.96)
+cont.potential<-data.frame(countries, stand.bias)
+#now we create an index from 0 to 1. 0 the minimum priorty (N.America), 1 the maximum the highest priority #(Africa)
+cont.potential$norm<-1-(cont.potential$stand.bias+0.96)/(1.93+0.96)
+#let's see how it looks in a map (pretty stupid one, but maybe good for representation purposes)
+#points every .5degrees
+sampling<-raster(nrow=360,ncol=720,xmn=-180, xmx=180, ymn=-90, ymx=90)
+#recopy here the coords function for self-standing of results
+coords2country = function(points)
+{  
+  countriesSP <- getMap(resolution='low')
+  pointsSP = SpatialPoints(points, proj4string=CRS(proj4string(countriesSP)))  
+  indices = over(pointsSP, countriesSP)
+  indices$REGION   # returns the continent (7 continent model)
+}
+
+cont.rep<-coords2country(coordinates(sampling))
+levels(cont.rep)<-c(1,0,0.875,0.795,0.689,0,0.830)
+plot(cont.rep)
+sampling2<-data.frame(coordinates(sampling), cont.rep)
+names(sampling2)<-c('x','y','cont.pri')
+cont.priority.map<-rasterFromXYZ(sampling2)
+cont.priority.map2 = cont.priority.map
+cont.priority.map2[is.na(cont.priority.map2)] = 0
+plot(cont.priority.map2, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='grey99',
+     main='Continent priority')
+###so map for future sampling is cont.priority.map2
+##for purpose of having the sampling raster of each similar is cont.priority.map
+
+##Ecoregions####
+#bring back the data and transform into 0-1 index (also reverse to make it less represented higher value)
+ecoregions<-c('Equatorial','Arid','Warm.Temperate','Cold.Temperate','Polar')
+n.chron<-c(28,355,1539,1435,257)
+ecor.bias<-data.frame(ecoregions, n.chron)
+ecor.bias$n.chron.norm<-1-((ecor.bias$n.chron-28)/(1539-28))
+#the world dataset to project into
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Ecoregions")
+ecoregions<-read.table('KGcoords.txt', sep='\t', header=T)
+head(ecoregions)
+main.eco<-ecoregions[,-4]
+#now change the categories to the values resulting in ecor.bias$n.chron.norm (is faster that one given they
+#are very few categories)
+levels(main.eco$Main.Clim)<-c(1,0.78,0,0.07,0.85)
+names(main.eco)<-c('x','y','Clim.prio')
+main.eco2<-data.frame(main.eco$y,main.eco$x, main.eco$Clim.prio)
+ecoregions.priority.map<-rasterFromXYZ(main.eco2)
+ecoregions.priority.map[is.na(ecoregions.priority.map)] = 0
+plot(ecoregions.priority.map, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='grey99',
+     main='Ecoregions priority')
+##name for ecoregions is ecoregions.priority.map
+####now elevations#########
+#bring data from elevations part in corrected.freq need to run the elevation part for this
+head(alt.data)
+#correct it to have 0-1 min, max values
+alt.data$corrected.freq.norm<-1-((alt.data$corrected.freq-(-1))
+                                   /(7.009807-(-1)))
+plot(alt.data$corrected.freq.norm)
+#this is unapplyable, so I'd transform it to a smooth and apply as response function
+smooth.ele<-smooth.spline(alt.data$mid.elevation,alt.data$corrected.freq.norm)
+plot(smooth.ele, type='l', ylim=c(0,1), lwd=3, col='orangered')
+points(alt.data$mid.elevation,alt.data$corrected.freq.norm, pch=16, col=firebrick.tr)
+#now approxfun can give the response function to obtain this
+a<-approxfun(smooth.ele)
+#to apply to the worl, first obtain the raster points of world elevation
+sampling.ele<-raster(nrow=360,ncol=720,xmn=-180, xmx=180, ymn=-90, ymx=90)
+cont.ele<-extract(w, coordinates(sampling.ele))
+#and apply the response function and reput the raster together
+cont.ele2<-sapply(cont.ele, FUN=a)
+sampling2<-data.frame(coordinates(sampling.ele), cont.ele2)
+head(sampling2)
+plot(cont.ele2)
+names(sampling2)<-c('x','y','ele.prio')
+ele.priority.map<-rasterFromXYZ(sampling2)
+ele.priority.map[is.na(ele.priority.map)] = 0
+plot(ele.priority.map, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='grey99',
+     main='Elevation priority')
+##the final product for elevation is ele.priority.map
+##Updatedness, is the time since last time it was visited since many of the series with good coverage are####
+##actually pretty old
+head(metadata2)
+##ok, let's calculate the time since sampling for each chronology
+metadata2$outdatedness<-2016-metadata2$end.date
+plot(metadata2$outdatedness)
+#most of them actually start about 50 years ago
+plot(metadata2$outdatedness, ylim=c(0,300))
+#we will consider those with more than 50 assigned to be maxibecause otherwise it would stretch to meaningless
+metadata2$outdatedness.cor<-ifelse(metadata2$outdatedness>50, 50, metadata2$outdatedness)
+plot(metadata2$outdatedness.cor)
+#now standardize
+metadata2$outdatedness.cor<-metadata2$outdatedness.cor/(max(metadata2$outdatedness.cor)-min(metadata2$outdatedness.cor))
+plot(metadata2$outdatedness.cor)
+##in this index 1 means very old, thus very needed to update, 0 means no need to update at all
+#how does it look spatially
+par(mfcol=c(1,1))
+plot(metadata2$longitude, metadata2$latitude, pch=16, cex=metadata2$outdatedness.cor, col=rgb(0,0,0,0.15))
+##transform it into a raster value with minimum value per grid of the ones covered
+#reflects last time since a 2 degree grid was sampled
+pts = coordinates(data.frame(metadata2$longitude, metadata2$latitude))
+rast<-raster(nrow=90,ncol=180,xmn=-180, xmx=180, ymn=-90, ymx=90)
+extent(rast)<-extent(pts)
+#the never visited points are assigned value 0 (=NA for the PSI calculation) by definition, we use fun=min to capture #the value with lower priority (the last time the gridcell was visited)
+outdated.priority.map<-rasterize(pts, rast, metadata2$outdatedness.cor, fun = min, background=0)
+outdated.priority.map[is.na(outdated.priority.map)] = 0
+hist(outdated.priority.map)
+#plot
+plot(outdated.priority.map, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='grey99',
+     main='Outdated priority'
+     )
+data(worldMapEnv)
+map('world', 
+    fill = F, 
+    col = 'grey40',
+    boundary =T,
+    interior = F,
+    add=T
+)
+##ok, the resulting product is outdated.priority.map
+###water and temperature limitation maps#####
+##density functions are temp.lim.den and water.lim.den
+##let's obtain the function first, then normalize and inverse it to become an index and then apply the function again
+x = seq(0,100,1)
+y = sapply(x, approxfun(temp.lim.den))
+y.norm = 1-((y-min(y))/(max(y)-min(y)))
+par(mfcol=c(2,1))
+plot(x,y)
+plot(x,y.norm)
+par(mfcol=c(1,1))
+temp.den.funct = approxfun(y.norm)
+#temp.den.funct is the response function that we can apply to the map
+##bring back the map
+temp.lim.r = raster(("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Temperature limitation maps/temperature.limitation.asc.txt"))
+#the sampling points uniformly accross the globe
+sampling.temp = raster(nrow=360,ncol=720,xmn=-180, xmx=180, ymn=-90, ymx=90)
+samp.tem = extract(temp.lim.r, coordinates(sampling.temp))
+#and then we apply temp.den.funct
+samp.tem2 = sapply (samp.tem, FUN = temp.den.funct)
+temp.limitation = data.frame(coordinates(sampling.temp), samp.tem2)
+head(temp.limitation)
+temp.priority.map<-rasterFromXYZ(temp.limitation)
+temp.priority.map[is.na(temp.priority.map)] = 0
+plot(temp.priority.map, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='blue',
+     main='Temperature priority')
+##waterlimitation can be done exactly the same changing names
+x = seq(0,100,1)
+y = sapply(x, approxfun(water.lim.den))
+y.norm = 1-((y-min(y))/(max(y)-min(y)))
+par(mfcol=c(2,1))
+plot(x,y)
+plot(x,y.norm)
+par(mfcol=c(1,1))
+water.den.funct = approxfun(y.norm)
+##bring back the map
+water.lim.r<-raster(("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Water limitation maps/water.limitation.asc.txt"))
+sampling.water = raster(nrow=360,ncol=720,xmn=-180, xmx=180, ymn=-90, ymx=90)
+samp.wat = extract(water.lim.r, coordinates(sampling.water))
+samp.wat2 = sapply (samp.wat, FUN = water.den.funct)
+wat.limitation = data.frame(coordinates(sampling.water), samp.wat2)
+head(wat.limitation)
+water.priority.map<-rasterFromXYZ(wat.limitation)
+water.priority.map[is.na(water.priority.map)] = 0
+plot(water.priority.map, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='grey99',
+     main='Water priority')
+###now we have the diversity and associated diversity#####
+##similarly to before, obtain response function from before, inverse and standardize, transform to spline and approxfun
+plant.diversity = hist(plant.div.data$plant.div)
+plant.div = data.frame(plant.diversity$mids, plant.diversity$counts)
+names(plant.div) = c('mid','count')
+plant.div$corrected.count = 1-((plant.div$count-min(plant.div$count))/(max(plant.div$count)-min(plant.div$count)))
+plot(plant.div$mid, plant.div$corrected.count)
+smooth.plant.div = smooth.spline(plant.div$mid, plant.div$corrected.count)
+plot(smooth.plant.div, type='l', ylim=c(0,1), lwd=3, col='orangered')
+a<-approxfun(smooth.plant.div)
+##the map to project onto
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Biodiverisity/Number of plant species per ecoregion")
+plant.div.r<-readShapeSpatial("plant.div.shp")
+##some has weird values of missing (-9999)
+plant.div.r[plant.div.r$plant_spcs==-9999] = NA
+hist(plant.div.r$plant_spcs)
+##fixed
+head(plant.div.r)
+r <- raster(ncol=360, nrow=180)
+extent(r) <- extent(plant.div.r)
+rp <- rasterize(plant.div.r, r, 'plant_spcs')
+plot(rp)
+hist(rp)
+sampling.plant.div<-raster(nrow=360,ncol=720,xmn=-180, xmx=180, ymn=-90, ymx=90)
+sampling.plant.diversity<-extract(rp, coordinates(sampling.plant.div))
+samp.plant.div = sapply(sampling.plant.diversity, FUN=a)
+plant.div.p = data.frame(coordinates(sampling.plant.div), samp.plant.div)
+head(plant.div.p)
+plant.div.priority.map = rasterFromXYZ(plant.div.p)
+plant.div.priority.map[is.na(plant.div.priority.map)] = 0
+plot(plant.div.priority.map, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='blue',
+     main='Plant diversity priority')
+####Now we repeat with the associated diversity
+associated.div = hist(ass.div.itrdb)
+ass.div = data.frame(associated.div$mids, associated.div$counts)
+names(ass.div) = c('mid','count')
+ass.div$corrected.count = 1-((ass.div$count-min(ass.div$count))/(max(ass.div$count)-min(ass.div$count)))
+plot(ass.div$mid, ass.div$corrected.count)
+smooth.ass.div = smooth.spline(ass.div$mid, ass.div$corrected.count)
+plot(smooth.ass.div, type='l', ylim=c(0,1), lwd=3, col='orangered')
+b<-approxfun(smooth.ass.div)
+##the map to project onto
+setwd("C:/Users/rud780/Desktop/ITRDB database cleaning/Environmental data/Biodiverisity/associated bio/Projected raster")
+ass.div.r<-raster(("all_div_projected.txt"))
+hist(ass.div.r)
+ass.div.r[is.na(ass.div.r)] = 0
+plot(ass.div.r)
+##no weird values here, although missing values were transformed into 0
+sampling.ass.div<-raster(nrow=360,ncol=720,xmn=-180, xmx=180, ymn=-90, ymx=90)
+sampling.ass.diversity<-extract(ass.div.r, coordinates(sampling.ass.div))
+samp.ass.div = sapply(sampling.ass.diversity, FUN=b)
+ass.div.p = data.frame(coordinates(sampling.ass.div), samp.ass.div)
+head(ass.div.p)
+ass.div.priority.map = rasterFromXYZ(ass.div.p)
+ass.div.priority.map[is.na(ass.div.priority.map)] = 0
+plot(ass.div.priority.map, 
+     col=colorRampPalette(c('#fee0d2',
+                            '#fc9272',
+                            '#de2d26'))(100), 
+     colNA='blue',
+     main='Associated forest diversity priority')
+
+#########################Putting all indices together#######################################
+total.sampling<-raster(nrow=180,ncol=360,xmn=-180, xmx=180, ymn=-90, ymx=90)
+e.cont = extract(cont.priority.map,coordinates(total.sampling))
+
+sampling = data.frame(coordinates(total.sampling),e.cont)
+head(sampling)
+sampling.land = na.omit(sampling)
+
+e.cont = extract(cont.priority.map2,data.frame(sampling.land$x, sampling.land$y))
+e.ecor = extract(ecoregions.priority.map,data.frame(sampling.land$x, sampling.land$y))
+e.ele = extract(ele.priority.map,data.frame(sampling.land$x, sampling.land$y))
+e.temp.lim = extract(temp.priority.map,data.frame(sampling.land$x, sampling.land$y))
+e.wat.lim = extract(water.priority.map,data.frame(sampling.land$x, sampling.land$y))
+e.outdated = extract(outdated.priority.map,data.frame(sampling.land$x, sampling.land$y))
+e.outdated[is.na(e.outdated)] = 0
+e.plant.div = extract(plant.div.priority.map,data.frame(sampling.land$x, sampling.land$y))
+e.ass.div = extract(ass.div.priority.map,data.frame(sampling.land$x, sampling.land$y))
+
+e = data.frame(sampling.land$x, 
+               sampling.land$y,
+               e.cont,e.ecor,
+               e.ele,
+               e.wat.lim, 
+               e.temp.lim, 
+               e.outdated,
+               e.plant.div,
+               e.ass.div)
+names(e)[c(1,2)] = c('x','y')
+head(e)
+
+### scenarios#############
+####SCENARIO 1# EQUAL PRIORITY#####
+##define the weights for each factor
+w.cont = 1
+w.ecor = 1
+w.ele = 1
+w.wat.lim = 1
+w.temp.lim = 1
+w.outdated = 1
+w.plant.div = 1
+w.ass.div = 1
+e$p.index = (w.cont*e$e.cont+
+               w.ecor*e$e.ecor+
+               w.ele*e$e.ele+
+               w.wat.lim*e$e.wat.lim+
+               w.temp.lim*e.temp.lim+
+               w.outdated*e.outdated+
+               w.ass.div*e.ass.div+
+               w.plant.div*e.plant.div)/sum(w.cont,
+                                            w.ecor,
+                                            w.ele,
+                                            w.wat.lim,
+                                            w.temp.lim,
+                                            w.outdated,
+                                            w.plant.div,
+                                            w.ass.div)
+head(e)
+p.index2 = data.frame(e$x, e$y, e$p.index)
+p.index.r.equal = rasterFromXYZ(p.index2)
+plot(p.index.r.equal,
+     col=colorRampPalette(c('white',
+                            'lightpink',
+                            'pink',
+                            'red',
+                            'purple'))(100), 
+     colNA='grey99',
+     main='Equal Priority')
+seaso.forest.simp2<-resample(seaso.forest.simp,p.index.r.equal, method='ngb')
+seaso.forest.simp2[is.na(seaso.forest.simp2)] = 0
+plot(seaso.forest.simp2)
+p.index.r.equal.filtered = p.index.r.equal * seaso.forest.simp2
+plot(p.index.r.equal.filtered,
+     col=colorRampPalette(c('white',
+                            'lightpink',
+                            'pink',
+                            'red',
+                            'purple'))(100), 
+     colNA='grey99',
+     main='Equal Priority (seasonality and forest cover filtered out)')
+data(worldMapEnv)
+map('world', 
+    fill = F, 
+    col = rgb(0,0,0,0.4),
+    add=T
+)
+
+####SCENARIO 2# ECOLOGICAL RESEARCH PRIORITY#####
+##define the weigths for each factor
+w.cont = 1
+w.ecor = 1
+w.ele = 0.5
+w.wat.lim = 0.1
+w.temp.lim = 0.1
+w.outdated = 0.1
+w.plant.div = 1
+w.ass.div = 1
+e$p.index = (w.cont*e$e.cont+
+               w.ecor*e$e.ecor+
+               w.ele*e$e.ele+
+               w.wat.lim*e$e.wat.lim+
+               w.temp.lim*e.temp.lim+
+               w.outdated*e.outdated+
+               w.ass.div*e.ass.div+
+               w.plant.div*e.plant.div)/sum(w.cont,
+                                            w.ecor,
+                                            w.ele,
+                                            w.wat.lim,
+                                            w.temp.lim,
+                                            w.outdated,
+                                            w.plant.div,
+                                            w.ass.div)
+head(e)
+p.index2 = data.frame(e$x, e$y, e$p.index)
+p.index.r.ecol = rasterFromXYZ(p.index2)
+plot(p.index.r.ecol,
+     col=colorRampPalette(c('white',
+                            'lightpink',
+                            'pink',
+                            'red',
+                            'purple'))(100), 
+     colNA='grey99',
+     main='Ecological Research Priority')
+seaso.forest.simp2<-resample(seaso.forest.simp,p.index.r.ecol, method='ngb')
+seaso.forest.simp2[is.na(seaso.forest.simp2)] = 0
+p.index.r.ecol.filtered = p.index.r.ecol * seaso.forest.simp2
+plot(p.index.r.ecol.filtered,
+     col=colorRampPalette(c('white',
+                            'lightpink',
+                            'pink',
+                            'red',
+                            'purple'))(100), 
+     colNA='grey99',
+     main='Ecological Research Priority (seasonality and forest cover filtered out)')
+data(worldMapEnv)
+map('world', 
+    fill = F, 
+    col = rgb(0,0,0,0.4),
+    add=T
+)
+
+####SCENARIO 3# Climatological RESEARCH PRIORITY#####
+##define the weigths for each factor
+w.cont = 1
+w.ecor = 0.1
+w.ele = 0.1
+w.wat.lim = 0.5
+w.temp.lim = 0.5
+w.outdated = 1
+w.plant.div = 0.1
+w.ass.div = 0.1
+e$p.index = (w.cont*e$e.cont+
+               w.ecor*e$e.ecor+
+               w.ele*e$e.ele+
+               w.wat.lim*e$e.wat.lim+
+               w.temp.lim*e.temp.lim+
+               w.outdated*e.outdated+
+               w.ass.div*e.ass.div+
+               w.plant.div*e.plant.div)/sum(w.cont,
+                                            w.ecor,
+                                            w.ele,
+                                            w.wat.lim,
+                                            w.temp.lim,
+                                            w.outdated,
+                                            w.plant.div,
+                                            w.ass.div)
+head(e)
+p.index2 = data.frame(e$x, e$y, e$p.index)
+p.index.r.clim = rasterFromXYZ(p.index2)
+plot(p.index.r.clim,
+     col=colorRampPalette(c('white',
+                            'lightpink',
+                            'pink',
+                            'red',
+                            'purple'))(100), 
+     colNA='grey99',
+     main='Climatic Research Priority')
+seaso.forest.simp2<-resample(seaso.forest.simp,p.index.r.clim, method='ngb')
+seaso.forest.simp2[is.na(seaso.forest.simp2)] = 0
+p.index.r.clim.filtered = p.index.r.clim * seaso.forest.simp2
+plot(p.index.r.clim.filtered,
+     col=colorRampPalette(c('white',
+                            'lightpink',
+                            'pink',
+                            'red',
+                            'purple'))(100), 
+     colNA='grey99',
+     main='Climatical Research Priority (seasonality and forest cover filtered out)')
+data(worldMapEnv)
+map('world', 
+    fill = F, 
+    col = rgb(0,0,0,0.4),
+    add=T
+)
+##end of code
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
