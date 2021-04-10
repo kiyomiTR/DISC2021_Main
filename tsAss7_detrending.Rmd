@@ -1,0 +1,37 @@
+---
+title: "Assign_7 Detrending"
+output: html_notebook
+---
+
+RESOURCES
+1) dplR docs: https://www.rdocumentation.org/packages/dplR/versions/1.7.2
+
+APPROACH
+1) Go to ITRDB: 
+Download the rwl file of interest
+
+2) Open and read file using dplR
+
+```{r}
+library(dplR)
+BIG.rwl <- read.tucson(file.choose())
+```
+
+Detrend ALL series in an rwl model using ONE method
+```{r}
+BIG.rwi <- detrend(BIG.rwl, method = "Spline",make.plot = TRUE,return.info = TRUE)
+```
+
+Detrend ONE series
+View different types of detrending
+```{r}
+tree <- "BIG040NW"
+series <- BIG.rwl[,tree]
+tree.rwi <- detrend.series(y=series,y.name = tree,verbose=TRUE)
+```
+
+Build a chronology
+```{r}
+
+```
+
